@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getSurveyQuestions } = require('../services/sheetsService');
-const { SurveyResponse } = require('../database/mongo');
+const { SurveyResponse, RewardToken } = require('../database/mongo');
 const { generateToken } = require('../services/tokenService');
 const logger = require('../utils/logger');
 
@@ -45,6 +45,16 @@ router.post('/submit', async (req, res) => {
       userAgent: req.get('User-Agent')
     });
     await surveyResponse.save();
+
+    // ✅ Save RewardToken to database so /redeem can validate it
+    const expiryHours = parseInt(process.env.TOKEN_EXPIRY_HOURS) || 24;
+    const rewardToken = new RewardToken({
+      token,
+      surveyId: surveyResponse._id,
+      used: false,
+      expiresAt: new Date(Date.now() + expiryHours * 60 * 60 * 1000)
+    });
+    await rewardToken.save();
 
     // Generate redemption URL
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
