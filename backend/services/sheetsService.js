@@ -3,10 +3,8 @@ const logger = require('../utils/logger');
 
 const SHEET_NAME_QUESTIONS = 'SurveyQuestions';
 const SHEET_NAME_TRANSACTIONS = 'Transactions';
+const SHEET_NAME_RESPONSES = 'SurveyResponses';
 
-/**
- * Create authenticated Google Sheets client
- */
 function getSheetsClient() {
   const auth = new google.auth.GoogleAuth({
     credentials: {
@@ -20,7 +18,6 @@ function getSheetsClient() {
 
 /**
  * Fetch survey questions from Google Sheets
- * Expected columns: id, question, type, options, required
  */
 async function getSurveyQuestions() {
   try {
@@ -29,7 +26,7 @@ async function getSurveyQuestions() {
 
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${SHEET_NAME_QUESTIONS}!A2:E1000` // Skip header row
+      range: `${SHEET_NAME_QUESTIONS}!A2:E1000`
     });
 
     const rows = response.data.values || [];
@@ -43,7 +40,7 @@ async function getSurveyQuestions() {
         options: options ? options.split(',').map(o => o.trim()) : [],
         required: (required || '').toLowerCase() === 'yes'
       };
-    }).filter(q => q.question); // Filter out empty rows
+    }).filter(q => q.question);
   } catch (error) {
     logger.error('Failed to fetch survey questions from Google Sheets:', error);
     throw new Error('Failed to load survey questions');
@@ -51,7 +48,68 @@ async function getSurveyQuestions() {
 }
 
 /**
- * Log a top-up transaction to Google Sheets
+ * Log survey response answers to SurveyResponses sheet.
+ * Dynamically reads question headers from SurveyQuestions sheet
+ * so each column matches the actual question text.
+ */
+async function logSurveyResponseToSheets({ answers, token, timestamp }) {
+  try {
+    const sheets = getSheetsClient();
+    const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+
+    // 1. Fetch question list to build headers
+    const qRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${SHEET_NAME_QUESTIONS}!A2:B1000`
+    });
+    const questionRows = qRes.data.values || [];
+    // questionRows = [[id, question_text], ...]
+
+    // 2. Check if SurveyResponses sheet has a header row already
+    const headerRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${SHEET_NAME_RESPONSES}!A1:ZZ1`
+    });
+    const existingHeaders = (headerRes.data.values || [[]])[0] || [];
+
+    // 3. Build header row if sheet is empty
+    if (existingHeaders.length === 0) {
+      const headers = ['Timestamp', 'Token', ...questionRows.map(r => r[1] || `Q${r[0]}`)];
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${SHEET_NAME_RESPONSES}!A1`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [headers] }
+      });
+    }
+
+    // 4. Build answer row in same column order as questions
+    const answerValues = questionRows.map((r, idx) => {
+      const qId = r[0];
+      const answer = answers[`q${qId}`];
+      if (Array.isArray(answer)) return answer.join(', ');
+      return answer !== undefined ? String(answer) : '';
+    });
+
+    const row = [timestamp || new Date().toISOString(), token || '', ...answerValues];
+
+    // 5. Append the row
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${SHEET_NAME_RESPONSES}!A:ZZ`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [row] }
+    });
+
+    logger.info(`Survey response logged to Google Sheets | Token: ${token}`);
+  } catch (error) {
+    logger.error('Failed to log survey response to Google Sheets:', error);
+    // Non-critical — don't throw
+  }
+}
+
+/**
+ * Log a top-up transaction to Transactions sheet
  */
 async function logTransactionToSheets({ timestamp, trace, phone, amount, channel, code, description }) {
   try {
@@ -70,8 +128,7 @@ async function logTransactionToSheets({ timestamp, trace, phone, amount, channel
     logger.info(`Transaction logged to Google Sheets | Trace: ${trace}`);
   } catch (error) {
     logger.error('Failed to log transaction to Google Sheets:', error);
-    // Don't throw — this is a non-critical background task
   }
 }
 
-module.exports = { getSurveyQuestions, logTransactionToSheets };
+module.exports = { getSurveyQuestions, logSurveyResponseToSheets, logTransactionToSheets };
