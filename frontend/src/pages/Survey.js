@@ -71,7 +71,20 @@ export default function Survey() {
     try {
       const res = await axios.post(`${API_URL}/api/survey/submit`, { answers });
       if (res.data.success) {
-        navigate('/redeem', { state: { redemptionUrl: res.data.redemptionUrl } });
+        // Extract token from redemptionUrl and put it in the URL directly
+        const redemptionUrl = res.data.redemptionUrl || '';
+        let token = '';
+        try {
+          const urlObj = new URL(redemptionUrl);
+          token = urlObj.searchParams.get('token');
+        } catch {
+          token = redemptionUrl.split('?token=')[1] || '';
+        }
+        if (token) {
+          navigate(`/redeem?token=${token}`);
+        } else {
+          setError('Submission succeeded but no token received. Please contact support.');
+        }
       }
     } catch (err) {
       setError(err.response?.data?.error || 'Submission failed. Please try again.');
@@ -132,7 +145,7 @@ export default function Survey() {
             placeholder="Type your answer here..."
             className="w-full border border-gray-300 rounded-lg p-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
         );
-      default: // text
+      default:
         return (
           <input type="text" value={val || ''} onChange={e => handleAnswer(q.id, e.target.value)}
             placeholder="Type your answer here..."
